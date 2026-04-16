@@ -73,11 +73,7 @@ int main(int argc, char *argv[]) {
 
     int bytes = recv(sock, &msg, sizeof(HackerMessage), 0);
 
-    if (bytes < 0) {
-        perror("Erro no recv");
-        close(sock);
-        exit(1);
-    } else if (bytes == 0) {
+    if (bytes <= 0) {
         printf("Servidor fechou a conexão\n");
         close(sock);
         exit(1);
@@ -89,12 +85,7 @@ int main(int argc, char *argv[]) {
             printf("Insira seu palpite:\n");
 
             char input[6];
-            scanf("%s", input);
-
-            if (valida_senha(input) == NULL) {
-                printf("Senha inválida. Por favor, insira uma senha de 5 dígitos.\n");
-                continue;
-            }
+            scanf("%5s", input);
 
             HackerMessage guess_msg;
             memset(&guess_msg, 0, sizeof(HackerMessage));
@@ -119,6 +110,23 @@ int main(int argc, char *argv[]) {
                 break;
             }
 
+            if (resp.type == MSG_ERROR) {
+                printf("Insira uma sequ^encia válida!\n");
+                continue;
+            }
+
+            printf("Dica: ");
+            for (int i = 0; i < 5; i++) {
+                if (resp.feedback[i] == 2) {
+                    printf("%d", guess_msg.guess[i]);
+                } else if (resp.feedback[i] == 1) {
+                    printf("*");
+                } else {
+                    printf("_");
+                }
+            }
+            printf("\n");
+
             printf("Tentativas realizadas: %d\n", resp.attempts);
 
             if (resp.type == MSG_WIN) {
@@ -129,8 +137,5 @@ int main(int argc, char *argv[]) {
     }
 
     close(sock);
-
     return 0;
 }
-
-
