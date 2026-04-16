@@ -14,6 +14,8 @@ int main(int argc, char *argv[]) {
 
     char *protocol = argv[1];
     int port = atoi(argv[2]);
+    char *secret = argv[3];
+    int attempts = 0;
 
     int server_sock;
 
@@ -89,12 +91,58 @@ int main(int argc, char *argv[]) {
 
     HackerMessage msg;
     memset(&msg, 0, sizeof(HackerMessage));
+
     msg.type = MSG_START;
     msg.attempts = 0;
     msg.win_status = 0;
 
-   if (send(client_sock, &msg, sizeof(HackerMessage), 0) < 0) {
+    strncpy(msg.message, "START", MSG_SIZE);
+
+    if (send(client_sock, &msg, sizeof(HackerMessage), 0) < 0) {
         perror("Erro no send");
+    }
+
+    while (1) {
+
+        HackerMessage recv_msg;
+        memset(&recv_msg, 0, sizeof(HackerMessage));
+
+        int bytes = recv(client_sock, &recv_msg, sizeof(HackerMessage), 0);
+
+        if (bytes <= 0) {
+            printf("Cliente desconectado\n");
+            break;
+        }
+
+        if (recv_msg.type == MSG_GUESS) {
+
+            attempts++;
+
+            char guess_str[6];
+            for (int i = 0; i < 5; i++) {
+                guess_str[i] = recv_msg.guess[i] + '0';
+            }
+            guess_str[5] = '\0';
+
+            HackerMessage resp;
+            memset(&resp, 0, sizeof(HackerMessage));
+
+            resp.attempts = attempts;
+
+            if (strcmp(guess_str, secret) == 0) {
+                resp.type = MSG_WIN;
+                resp.win_status = 1;
+
+                send(client_sock, &resp, sizeof(HackerMessage), 0);
+                break;
+
+            } else {
+                resp.type = MSG_FEEDBACK;
+                resp.win_status = 0;
+
+                send(client_sock, &resp, sizeof(HackerMessage), 0);
+            }
+        }
     }
 
     close(client_sock);

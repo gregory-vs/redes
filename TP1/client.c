@@ -84,7 +84,43 @@ int main(int argc, char *argv[]) {
     }
 
     if (msg.type == MSG_START) {
-        printf("Insira seu palpite:\n");
+
+        while (1) {
+            printf("Insira seu palpite:\n");
+
+            char input[100];
+            scanf("%s", input);
+
+            HackerMessage guess_msg;
+            memset(&guess_msg, 0, sizeof(HackerMessage));
+            guess_msg.type = MSG_GUESS;
+
+            for (int i = 0; i < 5; i++) {
+                guess_msg.guess[i] = input[i] - '0';
+            }
+
+            if (send(sock, &guess_msg, sizeof(HackerMessage), 0) < 0) {
+                perror("Erro no send");
+                break;
+            }
+
+            HackerMessage resp;
+            memset(&resp, 0, sizeof(HackerMessage));
+
+            int bytes = recv(sock, &resp, sizeof(HackerMessage), 0);
+
+            if (bytes <= 0) {
+                printf("Servidor desconectado\n");
+                break;
+            }
+
+            printf("Tentativas realizadas: %d\n", resp.attempts);
+
+            if (resp.type == MSG_WIN) {
+                printf("Acesso concedido! Thaísa recuperou o sistema!\n");
+                break;
+            }
+        }
     }
 
     close(sock);
