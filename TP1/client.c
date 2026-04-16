@@ -88,8 +88,13 @@ int main(int argc, char *argv[]) {
         while (1) {
             printf("Insira seu palpite:\n");
 
-            char input[100];
+            char input[6];
             scanf("%s", input);
+
+            if (valida_senha(input) == NULL) {
+                printf("Senha inválida. Por favor, insira uma senha de 5 dígitos.\n");
+                continue;
+            }
 
             HackerMessage guess_msg;
             memset(&guess_msg, 0, sizeof(HackerMessage));
@@ -127,3 +132,5 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+
+

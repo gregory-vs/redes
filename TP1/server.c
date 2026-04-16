@@ -5,6 +5,8 @@
 #include <arpa/inet.h>
 #include "protocol.h"
 
+int validate_pass(char *attempt, char *correct_pass, int feedback[5]);
+
 int main(int argc, char *argv[]) {
 
     if (argc != 4) {
@@ -16,10 +18,13 @@ int main(int argc, char *argv[]) {
     int port = atoi(argv[2]);
     char *secret = argv[3];
     int attempts = 0;
+    int feedback[5] = {0,0,0,0,0};
+
+    int is_ipv4 = strcmp(protocol, "v4") == 0;
 
     int server_sock;
 
-    if (strcmp(protocol, "v4") == 0) {
+    if (is_ipv4) {
         server_sock = socket(AF_INET, SOCK_STREAM, 0);
     } else if (strcmp(protocol, "v6") == 0) {
         server_sock = socket(AF_INET6, SOCK_STREAM, 0);
@@ -33,41 +38,33 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    if (strcmp(protocol, "v4") == 0) {
+    struct sockaddr_storage server_addr;
+    socklen_t addr_len;
 
-        struct sockaddr_in server_addr;
-        memset(&server_addr, 0, sizeof(server_addr));
+    memset(&server_addr, 0, sizeof(server_addr));
 
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_addr.s_addr = INADDR_ANY;
-        server_addr.sin_port = htons(port);
+    if (is_ipv4) {
+        struct sockaddr_in *addr4 = (struct sockaddr_in*)&server_addr;
 
-        if (bind(server_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-            perror("Erro no bind");
-            close(server_sock);
-            exit(1);
-        }
+        addr4->sin_family = AF_INET;
+        addr4->sin_addr.s_addr = INADDR_ANY;
+        addr4->sin_port = htons(port);
 
-        printf("Servidor iniciado em modo IPv4 na porta %d\n", port);
+        addr_len = sizeof(struct sockaddr_in);
+    } else {
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6*)&server_addr;
 
-    } 
-    
-    if (strcmp(protocol, "v6") == 0) {
+        addr6->sin6_family = AF_INET6;
+        addr6->sin6_addr = in6addr_any;
+        addr6->sin6_port = htons(port);
 
-        struct sockaddr_in6 server_addr6;
-        memset(&server_addr6, 0, sizeof(server_addr6));
+        addr_len = sizeof(struct sockaddr_in6);
+    }
 
-        server_addr6.sin6_family = AF_INET6;
-        server_addr6.sin6_addr = in6addr_any;
-        server_addr6.sin6_port = htons(port);
-
-        if (bind(server_sock, (struct sockaddr*)&server_addr6, sizeof(server_addr6)) < 0) {
-            perror("Erro no bind");
-            close(server_sock);
-            exit(1);
-        }
-
-        printf("Servidor iniciado em modo IPv6 na porta %d\n", port);
+    if (bind(server_sock, (struct sockaddr*)&server_addr, addr_len) < 0) {
+        perror("Erro no bind");
+        close(server_sock);
+        exit(1);
     }
 
     if (listen(server_sock, 1) < 0) {
@@ -76,7 +73,13 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    struct sockaddr_in client_addr;
+    if (is_ipv4) {
+        printf("Servidor iniciado em modo IPv4 na porta %d\n", port);
+    } else {
+        printf("Servidor iniciado em modo IPv6 na porta %d\n", port);
+    }
+
+    struct sockaddr_storage client_addr;
     socklen_t client_len = sizeof(client_addr);
 
     int client_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_len);
@@ -102,6 +105,9 @@ int main(int argc, char *argv[]) {
         perror("Erro no send");
     }
 
+    HackerMessage resp;
+    memset(&resp, 0, sizeof(HackerMessage));
+
     while (1) {
 
         HackerMessage recv_msg;
@@ -116,7 +122,7 @@ int main(int argc, char *argv[]) {
 
         if (recv_msg.type == MSG_GUESS) {
 
-            attempts++;
+            memset(&resp, 0, sizeof(HackerMessage));
 
             char guess_str[6];
             for (int i = 0; i < 5; i++) {
@@ -124,23 +130,32 @@ int main(int argc, char *argv[]) {
             }
             guess_str[5] = '\0';
 
-            HackerMessage resp;
-            memset(&resp, 0, sizeof(HackerMessage));
-
-            resp.attempts = attempts;
-
-            if (strcmp(guess_str, secret) == 0) {
-                resp.type = MSG_WIN;
-                resp.win_status = 1;
-
-                send(client_sock, &resp, sizeof(HackerMessage), 0);
-                break;
-
+            if (validate_pass(guess_str, secret, feedback) == 0) {
+                resp.type = MSG_ERROR;
+                resp.win_status = -1;
+                resp.attempts = attempts;
+                strncpy(resp.message, "Insira uma sequ^encia válida!", MSG_SIZE);
             } else {
-                resp.type = MSG_FEEDBACK;
-                resp.win_status = 0;
+                attempts++;
+                resp.attempts = attempts;
 
-                send(client_sock, &resp, sizeof(HackerMessage), 0);
+                if (strcmp(guess_str, secret) == 0) {
+                    resp.type = MSG_WIN;
+                    resp.win_status = 1;
+                } else {
+                    resp.type = MSG_FEEDBACK;
+                    resp.win_status = 0;
+                }
+
+                for (int i = 0; i < 5; i++) {
+                    resp.feedback[i] = feedback[i];
+                }
+            }
+
+            send(client_sock, &resp, sizeof(HackerMessage), 0);
+
+            if (resp.type == MSG_WIN) {
+                break;
             }
         }
     }
@@ -149,4 +164,41 @@ int main(int argc, char *argv[]) {
     close(server_sock);
 
     return 0;
+}
+
+int validate_pass(char *attempt, char *correct_pass, int feedback[5]) {
+    if (strlen(attempt) != 5) {
+        return 0;
+    }
+
+    for (int i = 0; i < 5; i++) {
+        if (attempt[i] < '0' || attempt[i] > '9') {
+            return 0;
+        }
+    }
+
+    for (int i = 0; i < 5; i++) {
+        feedback[i] = 0;
+    }
+    int used_secret[5] = {0,0,0,0,0};
+
+    for(int i = 0; i < 5; i++) {
+        if (attempt[i] == correct_pass[i]) {
+            feedback[i] = 2;
+            used_secret[i] = 1;
+        }
+    }
+
+    for(int i=0; i<5; i++) {
+        if (feedback[i] != 2) {
+            for (int j = 0; j < 5; j++) {
+                if (attempt[i] == correct_pass[j] && used_secret[j] == 0) { 
+                    feedback[i] = 1;
+                    used_secret[j] = 1;
+                    break;
+                }
+            }
+        }
+    }
+    return 1;
 }
