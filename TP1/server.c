@@ -115,11 +115,6 @@ int main(int argc, char *argv[]) {
 
         int bytes = recv(client_sock, &recv_msg, sizeof(HackerMessage), 0);
 
-        if (bytes <= 0) {
-            printf("Cliente desconectado\n");
-            break;
-        }
-
         if (recv_msg.type == MSG_GUESS) {
 
             memset(&resp, 0, sizeof(HackerMessage));
@@ -163,6 +158,7 @@ int main(int argc, char *argv[]) {
     close(client_sock);
     close(server_sock);
 
+    printf("Cliente desconectado\n");
     return 0;
 }
 
