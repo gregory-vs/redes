@@ -1,0 +1,25 @@
+{
+   "latex-workshop.latex.outDir": "build",
+   "latex-workshop.latex.autoBuild.run": "onSave",
+   "latex-workshop.latex.tools": [
+     {
+       "name": "latexmk",
+       "command": "latexmk",
+       "args": [
+         "-pdf",
+         "-shell-escape",
+         "-interaction=nonstopmode",
+         "-synctex=1",
+         "-outdir=build",
+         "%DOC%"
+       ]
+     }
+   ],
+   "latex-workshop.latex.recipes": [
+     {
+       "name": "latexmk (shell-escape)",
+       "tools": ["latexmk"]
+     }
+   ],
+   "latex-workshop.latex.recipe.default": "latexmk (shell-escape)"
+ }

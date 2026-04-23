@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Build LaTeX (latexmk)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "cd \"${workspaceFolder}\" && latexmk -pdf -shell-escape -interaction=nonstopmode -synctex=1 -outdir=build main.tex"
+    }
+  ]
+}
