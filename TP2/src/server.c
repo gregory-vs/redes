@@ -1,5 +1,7 @@
 #include "server.h"
 
+#include "protocol.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -12,18 +14,18 @@
 #include <unistd.h>
 
 #define BACKLOG 16
-#define BUFFER_SIZE 512
 
 typedef struct {
     int client_fd;
     struct sockaddr_in addr;
 } ClientArgs;
 
-static int send_all(int fd, const char *buffer, size_t length) {
+static int send_all(int fd, const void *buffer, size_t length) {
+    const char *data = buffer;
     size_t sent_total = 0;
 
     while (sent_total < length) {
-        ssize_t sent = send(fd, buffer + sent_total, length - sent_total, 0);
+        ssize_t sent = send(fd, data + sent_total, length - sent_total, 0);
         if (sent < 0) {
             if (errno == EINTR) {
                 continue;
@@ -36,50 +38,87 @@ static int send_all(int fd, const char *buffer, size_t length) {
     return 0;
 }
 
+static int recv_all(int fd, void *buffer, size_t length) {
+    char *data = buffer;
+    size_t received_total = 0;
+
+    while (received_total < length) {
+        ssize_t received = recv(fd, data + received_total, length - received_total, 0);
+        if (received == 0) {
+            return 1;
+        }
+        if (received < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        received_total += (size_t)received;
+    }
+
+    return 0;
+}
+
+static size_t bounded_strlen(const char *value, size_t max_len) {
+    size_t len = 0;
+
+    while (len < max_len && value[len] != '\0') {
+        len++;
+    }
+
+    return len;
+}
+
 static void *client_thread(void *arg) {
     ClientArgs *client = (ClientArgs *)arg;
     int client_fd = client->client_fd;
     char address[INET_ADDRSTRLEN] = "unknown";
     uint16_t port = ntohs(client->addr.sin_port);
+    char username[USER_SIZE + 1];
 
     inet_ntop(AF_INET, &client->addr.sin_addr, address, sizeof(address));
     free(client);
 
-    printf("Client connected: %s:%u\n", address, port);
-
-    const char *welcome = "Welcome! Type something and I will echo it back.\n";
-    if (send_all(client_fd, welcome, strlen(welcome)) < 0) {
-        perror("send");
+    Message message;
+    int status = recv_all(client_fd, &message, sizeof(message));
+    if (status != 0) {
         close(client_fd);
         return NULL;
     }
 
-    for (;;) {
-        char buffer[BUFFER_SIZE];
-        ssize_t received = recv(client_fd, buffer, sizeof(buffer), 0);
+    memcpy(username, message.username, USER_SIZE);
+    username[USER_SIZE] = '\0';
+    printf("[CONN] %s conectou.\n", username);
 
-        if (received == 0) {
+    if (message.type == MSG_POST) {
+        size_t content_len = bounded_strlen(message.content, CONTENT_SIZE);
+        printf("Message from %s:%u: %.*s\n", address, port, (int)content_len, message.content);
+
+        if (send_all(client_fd, &message, sizeof(message)) < 0) {
+            perror("send");
+            close(client_fd);
+            return NULL;
+        }
+    }
+
+    for (;;) {
+        status = recv_all(client_fd, &message, sizeof(message));
+        if (status == 1) {
             break;
         }
-
-        if (received < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
+        if (status < 0) {
             perror("recv");
             break;
         }
 
-        printf("Message from %s:%u: ", address, port);
-        fwrite(buffer, 1, (size_t)received, stdout);
-        if (buffer[received - 1] != '\n') {
-            printf("\n");
-        }
-        fflush(stdout);
+        if (message.type == MSG_POST) {
+            size_t content_len = bounded_strlen(message.content, CONTENT_SIZE);
+            printf("Message from %s:%u: %.*s\n", address, port, (int)content_len, message.content);
 
-        if (send_all(client_fd, buffer, (size_t)received) < 0) {
-            perror("send");
-            break;
+            if (send_all(client_fd, &message, sizeof(message)) < 0) {
+                perror("send");
+                break;
+            }
         }
     }
 
@@ -121,7 +160,7 @@ int server_run(uint16_t port) {
     }
 
     signal(SIGPIPE, SIG_IGN);
-    printf("Server listening on port %u\n", port);
+    printf("Aguardando conexoes na porta %u\n", port);
 
     for (;;) {
         struct sockaddr_in client_addr;
