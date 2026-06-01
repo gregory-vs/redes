@@ -2,6 +2,7 @@
 
 #include "protocol.h"
 #include "feed.h"
+#include "followers.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -25,6 +26,8 @@ typedef struct {
 static Feed feed;
 static pthread_mutex_t feed_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t feed_next_id = 1;
+static Followers followers;
+static pthread_mutex_t followers_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int send_all(int fd, const void *buffer, size_t length) {
     const char *data = buffer;
@@ -156,6 +159,13 @@ static int handle_message(int client_fd, const char *username, const Message *me
         return send_all(client_fd, message, sizeof(*message));
     }
 
+    if (message->type == MSG_FOLLOW) {
+        pthread_mutex_lock(&followers_mutex);
+        followers_add(&followers, message->content, username);
+        pthread_mutex_unlock(&followers_mutex);
+        return send_all(client_fd, message, sizeof(*message));
+    }
+
     if (message->type == MSG_READ) {
         return send_feed_entries(client_fd);
     }
@@ -212,6 +222,7 @@ static void *client_thread(void *arg) {
 
 int server_run(ServerProtocol protocol, uint16_t port) {
     feed_init(&feed);
+    followers_init(&followers);
     int family = (protocol == SERVER_PROTOCOL_V4) ? AF_INET : AF_INET6;
     int server_fd = socket(family, SOCK_STREAM, 0);
     if (server_fd < 0) {
