@@ -1,10 +1,14 @@
+#define _POSIX_C_SOURCE 200112L
+
 #include <arpa/inet.h>
 #include <errno.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -73,6 +77,24 @@ static size_t bounded_strlen(const char *value, size_t max_len) {
     return len;
 }
 
+static int parse_command(const char *value, uint16_t *type) {
+    if (strcasecmp(value, "FOLLOW") == 0) {
+        *type = MSG_FOLLOW;
+        return 0;
+    }
+    if (strcasecmp(value, "POST") == 0) {
+        *type = MSG_POST;
+        return 0;
+    }
+    if (strcasecmp(value, "READ") == 0) {
+        *type = MSG_READ;
+        return 0;
+    }
+
+    fprintf(stderr, "Comando invalido: %s\n", value);
+    return -1;
+}
+
 int main(int argc, char **argv) {
     if (argc != 4) {
         fprintf(stderr, "Usage: %s <ip> <port> <username>\n", argv[0]);
@@ -80,7 +102,8 @@ int main(int argc, char **argv) {
     }
 
     const char *ip = argv[1];
-    uint16_t port = parse_port(argv[2]);
+    const char *port_str = argv[2];
+    uint16_t port = parse_port(port_str);
     const char *username = argv[3];
 
     if (port == 0) {
@@ -92,37 +115,43 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *result = NULL;
+    int err = getaddrinfo(ip, port_str, &hints, &result);
+    if (err != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
+        return 1;
+    }
+
+    int sock = -1;
+    int last_errno = 0;
+    for (struct addrinfo *rp = result; rp != NULL; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock < 0) {
+            last_errno = errno;
+            continue;
+        }
+
+        if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0) {
+            break;
+        }
+
+        last_errno = errno;
+        close(sock);
+        sock = -1;
+    }
+
+    freeaddrinfo(result);
+
     if (sock < 0) {
-        perror("socket");
-        return 1;
-    }
-
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, ip, &server_addr.sin_addr) <= 0) {
-        fprintf(stderr, "Invalid IP address: %s\n", ip);
-        close(sock);
-        return 1;
-    }
-
-    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        if (last_errno != 0) {
+            errno = last_errno;
+        }
         perror("connect");
-        close(sock);
-        return 1;
-    }
-
-    Message intro;
-    memset(&intro, 0, sizeof(intro));
-    intro.type = MSG_FOLLOW;
-    strncpy(intro.username, username, USER_SIZE - 1);
-
-    if (send_all(sock, &intro, sizeof(intro)) < 0) {
-        perror("send");
-        close(sock);
         return 1;
     }
 
@@ -131,7 +160,14 @@ int main(int argc, char **argv) {
     char buffer[BUFFER_SIZE];
     uint32_t next_id = 1;
 
-    while (fgets(buffer, sizeof(buffer), stdin) != NULL) {
+    while (1) {
+        printf("Comandos: FOLLOW, POST, READ\n");
+        printf("Selecione um comando: ");
+        fflush(stdout);
+
+        if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+            break;
+        }
         buffer[strcspn(buffer, "\r\n")] = '\0';
         if (buffer[0] == '\0') {
             continue;
@@ -139,10 +175,11 @@ int main(int argc, char **argv) {
 
         Message msg;
         memset(&msg, 0, sizeof(msg));
-        msg.type = MSG_POST;
+        if (parse_command(buffer, &msg.type) != 0) {
+            continue;
+        }
         msg.msg_id = next_id++;
         strncpy(msg.username, username, USER_SIZE - 1);
-        strncpy(msg.content, buffer, CONTENT_SIZE - 1);
 
         if (send_all(sock, &msg, sizeof(msg)) < 0) {
             perror("send");
