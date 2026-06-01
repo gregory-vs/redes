@@ -64,6 +64,16 @@ static int recv_all(int fd, void *buffer, size_t length) {
     return 0;
 }
 
+static size_t bounded_strlen(const char *value, size_t max_len) {
+    size_t len = 0;
+
+    while (len < max_len && value[len] != '\0') {
+        len++;
+    }
+
+    return len;
+}
+
 static const char *message_type_name(uint16_t type) {
     switch (type) {
         case MSG_POST:
@@ -92,6 +102,15 @@ static void store_post(const char *username, const Message *message) {
     entry.content[CONTENT_SIZE - 1] = '\0';
 
     feed_add(&feed, &entry);
+
+    const char *prefix = (entry.username[0] == '@') ? "" : "@";
+    size_t content_len = bounded_strlen(entry.content, CONTENT_SIZE);
+    printf("[LOG] %s%s posted (ID %u): \"%.*s\"\n",
+           prefix,
+           entry.username,
+           entry.msg_id,
+           (int)content_len,
+           entry.content);
 }
 
 static void *client_thread(void *arg) {
