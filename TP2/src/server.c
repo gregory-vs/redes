@@ -1,6 +1,7 @@
 #include "server.h"
 
 #include "protocol.h"
+#include "feed.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -19,6 +20,10 @@ typedef struct {
     int client_fd;
     struct sockaddr_storage addr;
 } ClientArgs;
+
+static Feed feed;
+static pthread_mutex_t feed_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t feed_next_id = 1;
 
 static int send_all(int fd, const void *buffer, size_t length) {
     const char *data = buffer;
@@ -78,6 +83,17 @@ static void print_selection(const char *username, const Message *message) {
     printf("%s selected %s\n", username, message_type_name(message->type));
 }
 
+static void store_post(const char *username, const Message *message) {
+    FeedEntry entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.msg_id = feed_next_id++;
+    strncpy(entry.username, username, USER_SIZE - 1);
+    memcpy(entry.content, message->content, CONTENT_SIZE);
+    entry.content[CONTENT_SIZE - 1] = '\0';
+
+    feed_add(&feed, &entry);
+}
+
 static void *client_thread(void *arg) {
     ClientArgs *client = (ClientArgs *)arg;
     int client_fd = client->client_fd;
@@ -108,6 +124,11 @@ static void *client_thread(void *arg) {
     printf("[CONN] %s conectou.\n", username);
 
     print_selection(username, &message);
+    if (message.type == MSG_POST) {
+        pthread_mutex_lock(&feed_mutex);
+        store_post(username, &message);
+        pthread_mutex_unlock(&feed_mutex);
+    }
     if (send_all(client_fd, &message, sizeof(message)) < 0) {
         perror("send");
         close(client_fd);
@@ -125,6 +146,11 @@ static void *client_thread(void *arg) {
         }
 
         print_selection(username, &message);
+        if (message.type == MSG_POST) {
+            pthread_mutex_lock(&feed_mutex);
+            store_post(username, &message);
+            pthread_mutex_unlock(&feed_mutex);
+        }
         if (send_all(client_fd, &message, sizeof(message)) < 0) {
             perror("send");
             break;
@@ -137,6 +163,7 @@ static void *client_thread(void *arg) {
 }
 
 int server_run(ServerProtocol protocol, uint16_t port) {
+    feed_init(&feed);
     int family = (protocol == SERVER_PROTOCOL_V4) ? AF_INET : AF_INET6;
     int server_fd = socket(family, SOCK_STREAM, 0);
     if (server_fd < 0) {

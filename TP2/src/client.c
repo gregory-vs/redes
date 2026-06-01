@@ -77,21 +77,50 @@ static size_t bounded_strlen(const char *value, size_t max_len) {
     return len;
 }
 
-static int parse_command(const char *value, uint16_t *type) {
-    if (strcasecmp(value, "FOLLOW") == 0) {
-        *type = MSG_FOLLOW;
-        return 0;
+static char *skip_spaces(char *value) {
+    while (*value == ' ' || *value == '\t') {
+        value++;
     }
-    if (strcasecmp(value, "POST") == 0) {
-        *type = MSG_POST;
-        return 0;
+    return value;
+}
+
+static int parse_command_line(char *line, Message *msg) {
+    char *command = strtok(line, " \t");
+    if (command == NULL) {
+        return -1;
     }
-    if (strcasecmp(value, "READ") == 0) {
-        *type = MSG_READ;
+
+    char *argument = strtok(NULL, "");
+    if (argument != NULL) {
+        argument = skip_spaces(argument);
+    }
+
+    if (strcasecmp(command, "FOLLOW") == 0) {
+        msg->type = MSG_FOLLOW;
+        if (argument == NULL || *argument == '\0') {
+            fprintf(stderr, "Uso: FOLLOW <usuario>\n");
+            return -1;
+        }
+        strncpy(msg->content, argument, CONTENT_SIZE - 1);
         return 0;
     }
 
-    fprintf(stderr, "Comando invalido: %s\n", value);
+    if (strcasecmp(command, "POST") == 0) {
+        msg->type = MSG_POST;
+        if (argument == NULL || *argument == '\0') {
+            fprintf(stderr, "Uso: POST <mensagem>\n");
+            return -1;
+        }
+        strncpy(msg->content, argument, CONTENT_SIZE - 1);
+        return 0;
+    }
+
+    if (strcasecmp(command, "READ") == 0) {
+        msg->type = MSG_READ;
+        return 0;
+    }
+
+    fprintf(stderr, "Comando invalido: %s\n", command);
     return -1;
 }
 
@@ -158,11 +187,9 @@ int main(int argc, char **argv) {
     printf("Conectado ao servidor como %s\n", username);
 
     char buffer[BUFFER_SIZE];
-    uint32_t next_id = 1;
-
     while (1) {
-        printf("Comandos: FOLLOW, POST, READ\n");
-        printf("Selecione um comando: ");
+        printf("Comandos: FOLLOW <usuario>, POST <mensagem>, READ\n");
+        printf("> ");
         fflush(stdout);
 
         if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
@@ -175,10 +202,9 @@ int main(int argc, char **argv) {
 
         Message msg;
         memset(&msg, 0, sizeof(msg));
-        if (parse_command(buffer, &msg.type) != 0) {
+        if (parse_command_line(buffer, &msg) != 0) {
             continue;
         }
-        msg.msg_id = next_id++;
         strncpy(msg.username, username, USER_SIZE - 1);
 
         if (send_all(sock, &msg, sizeof(msg)) < 0) {

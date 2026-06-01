@@ -6,8 +6,8 @@ OBJ_DIR = obj
 SERVER_TARGET = server
 CLIENT_TARGET = client
 
-SERVER_SRCS = main.c src/protocol.c src/server.c
-CLIENT_SRCS = client.c
+SERVER_SRCS = src/main.c src/protocol.c src/server.c src/feed.c
+CLIENT_SRCS = src/client.c
 SERVER_OBJS = $(SERVER_SRCS:%.c=$(OBJ_DIR)/%.o)
 CLIENT_OBJS = $(CLIENT_SRCS:%.c=$(OBJ_DIR)/%.o)
 

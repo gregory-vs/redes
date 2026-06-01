@@ -7,10 +7,12 @@
 #define USER_SIZE 16
 
 typedef enum {
+    MSG_CONNECT = 0,
     MSG_POST = 1,
     MSG_FOLLOW = 2,
     MSG_READ = 3,
-    MSG_PUSH = 4
+    MSG_PUSH = 4,
+    MSG_END = 5
 } MessageType;
 
 typedef struct {
