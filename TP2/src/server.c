@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #define BACKLOG 16
+#define FEED_READ_LIMIT 5
 
 typedef struct {
     int client_fd;
@@ -74,25 +75,6 @@ static size_t bounded_strlen(const char *value, size_t max_len) {
     return len;
 }
 
-static const char *message_type_name(uint16_t type) {
-    switch (type) {
-        case MSG_POST:
-            return "POST";
-        case MSG_FOLLOW:
-            return "FOLLOW";
-        case MSG_READ:
-            return "READ";
-        case MSG_PUSH:
-            return "PUSH";
-        default:
-            return "UNKNOWN";
-    }
-}
-
-static void print_selection(const char *username, const Message *message) {
-    printf("%s selected %s\n", username, message_type_name(message->type));
-}
-
 static void store_post(const char *username, const Message *message) {
     FeedEntry entry;
     memset(&entry, 0, sizeof(entry));
@@ -113,22 +95,79 @@ static void store_post(const char *username, const Message *message) {
            entry.content);
 }
 
+static size_t feed_snapshot(FeedEntry *entries, size_t max_entries) {
+    size_t total = 0;
+    size_t start = 0;
+
+    pthread_mutex_lock(&feed_mutex);
+    total = feed_count(&feed);
+    if (total > max_entries) {
+        start = total - max_entries;
+    }
+
+    size_t copied = 0;
+    for (size_t i = start; i < total; i++) {
+        const FeedEntry *entry = feed_get(&feed, i);
+        if (entry == NULL) {
+            continue;
+        }
+        entries[copied++] = *entry;
+    }
+    pthread_mutex_unlock(&feed_mutex);
+
+    return copied;
+}
+
+static int send_feed_entries(int client_fd) {
+    FeedEntry entries[FEED_READ_LIMIT];
+    size_t count = feed_snapshot(entries, FEED_READ_LIMIT);
+
+    for (size_t i = count; i > 0; i--) {
+        const FeedEntry *entry = &entries[i - 1];
+        Message response;
+        memset(&response, 0, sizeof(response));
+        response.type = MSG_READ;
+        response.msg_id = entry->msg_id;
+        memcpy(response.username, entry->username, USER_SIZE);
+        response.username[USER_SIZE - 1] = '\0';
+        memcpy(response.content, entry->content, CONTENT_SIZE);
+        response.content[CONTENT_SIZE - 1] = '\0';
+
+        if (send_all(client_fd, &response, sizeof(response)) < 0) {
+            return -1;
+        }
+    }
+
+    Message end;
+    memset(&end, 0, sizeof(end));
+    end.type = MSG_END;
+    if (send_all(client_fd, &end, sizeof(end)) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int handle_message(int client_fd, const char *username, const Message *message) {
+    if (message->type == MSG_POST) {
+        pthread_mutex_lock(&feed_mutex);
+        store_post(username, message);
+        pthread_mutex_unlock(&feed_mutex);
+        return send_all(client_fd, message, sizeof(*message));
+    }
+
+    if (message->type == MSG_READ) {
+        return send_feed_entries(client_fd);
+    }
+
+    return send_all(client_fd, message, sizeof(*message));
+}
+
 static void *client_thread(void *arg) {
     ClientArgs *client = (ClientArgs *)arg;
     int client_fd = client->client_fd;
-    char address[INET6_ADDRSTRLEN] = "unknown";
-    uint16_t port = 0;
     char username[USER_SIZE + 1];
 
-    if (client->addr.ss_family == AF_INET) {
-        struct sockaddr_in *addr4 = (struct sockaddr_in *)&client->addr;
-        inet_ntop(AF_INET, &addr4->sin_addr, address, sizeof(address));
-        port = ntohs(addr4->sin_port);
-    } else if (client->addr.ss_family == AF_INET6) {
-        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&client->addr;
-        inet_ntop(AF_INET6, &addr6->sin6_addr, address, sizeof(address));
-        port = ntohs(addr6->sin6_port);
-    }
     free(client);
 
     Message message;
@@ -140,18 +179,14 @@ static void *client_thread(void *arg) {
 
     memcpy(username, message.username, USER_SIZE);
     username[USER_SIZE] = '\0';
-    printf("[CONN] %s conectou.\n", username);
+    printf("[CONN] %s%s conectou.\n", (username[0] == '@') ? "" : "@", username);
 
-    print_selection(username, &message);
-    if (message.type == MSG_POST) {
-        pthread_mutex_lock(&feed_mutex);
-        store_post(username, &message);
-        pthread_mutex_unlock(&feed_mutex);
-    }
-    if (send_all(client_fd, &message, sizeof(message)) < 0) {
-        perror("send");
-        close(client_fd);
-        return NULL;
+    if (message.type != MSG_CONNECT) {
+        if (handle_message(client_fd, username, &message) < 0) {
+            perror("send");
+            close(client_fd);
+            return NULL;
+        }
     }
 
     for (;;) {
@@ -164,20 +199,14 @@ static void *client_thread(void *arg) {
             break;
         }
 
-        print_selection(username, &message);
-        if (message.type == MSG_POST) {
-            pthread_mutex_lock(&feed_mutex);
-            store_post(username, &message);
-            pthread_mutex_unlock(&feed_mutex);
-        }
-        if (send_all(client_fd, &message, sizeof(message)) < 0) {
+        if (handle_message(client_fd, username, &message) < 0) {
             perror("send");
             break;
         }
     }
 
     close(client_fd);
-    printf("Client disconnected: %s:%u\n", address, port);
+    printf("[DISC] %s%s desconectou.\n", (username[0] == '@') ? "" : "@", username);
     return NULL;
 }
 

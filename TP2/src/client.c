@@ -124,6 +124,48 @@ static int parse_command_line(char *line, Message *msg) {
     return -1;
 }
 
+static void print_message_content(const Message *response) {
+    size_t content_len = bounded_strlen(response->content, CONTENT_SIZE);
+    fwrite(response->content, 1, content_len, stdout);
+    if (content_len == 0 || response->content[content_len - 1] != '\n') {
+        printf("\n");
+    }
+}
+
+static void print_feed_entry(const Message *response) {
+    const char *prefix = (response->username[0] == '@') ? "" : "@";
+    size_t username_len = bounded_strlen(response->username, USER_SIZE);
+    size_t content_len = bounded_strlen(response->content, CONTENT_SIZE);
+    printf("[FEED] ID %u | %s%.*s: \"%.*s\"\n",
+           response->msg_id,
+           prefix,
+           (int)username_len,
+           response->username,
+           (int)content_len,
+           response->content);
+}
+
+static int handle_read_response(int sock) {
+    for (;;) {
+        Message response;
+        int status = recv_all(sock, &response, sizeof(response));
+        if (status != 0) {
+            return status;
+        }
+
+        if (response.type == MSG_END) {
+            return 0;
+        }
+        if (response.type == MSG_READ) {
+            print_feed_entry(&response);
+            continue;
+        }
+        if (response.type == MSG_POST || response.type == MSG_PUSH) {
+            print_message_content(&response);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc != 4) {
         fprintf(stderr, "Usage: %s <ip> <port> <username>\n", argv[0]);
@@ -184,6 +226,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    Message connect_msg;
+    memset(&connect_msg, 0, sizeof(connect_msg));
+    connect_msg.type = MSG_CONNECT;
+    strncpy(connect_msg.username, username, USER_SIZE - 1);
+    if (send_all(sock, &connect_msg, sizeof(connect_msg)) < 0) {
+        perror("send");
+        close(sock);
+        return 1;
+    }
+
     printf("Conectado ao servidor como %s\n", username);
 
     char buffer[BUFFER_SIZE];
@@ -212,6 +264,18 @@ int main(int argc, char **argv) {
             break;
         }
 
+        if (msg.type == MSG_READ) {
+            int status = handle_read_response(sock);
+            if (status == 1) {
+                break;
+            }
+            if (status < 0) {
+                perror("recv");
+                break;
+            }
+            continue;
+        }
+
         Message response;
         int status = recv_all(sock, &response, sizeof(response));
         if (status == 1) {
@@ -223,11 +287,7 @@ int main(int argc, char **argv) {
         }
 
         if (response.type == MSG_POST || response.type == MSG_PUSH) {
-            size_t content_len = bounded_strlen(response.content, CONTENT_SIZE);
-            fwrite(response.content, 1, content_len, stdout);
-            if (content_len == 0 || response.content[content_len - 1] != '\n') {
-                printf("\n");
-            }
+            print_message_content(&response);
         }
     }
 
