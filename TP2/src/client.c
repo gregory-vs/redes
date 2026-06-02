@@ -11,6 +11,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <sys/select.h>
 
 #include "protocol.h"
 
@@ -124,14 +125,6 @@ static int parse_command_line(char *line, Message *msg) {
     return -1;
 }
 
-static void print_message_content(const Message *response) {
-    size_t content_len = bounded_strlen(response->content, CONTENT_SIZE);
-    fwrite(response->content, 1, content_len, stdout);
-    if (content_len == 0 || response->content[content_len - 1] != '\n') {
-        printf("\n");
-    }
-}
-
 static void print_feed_entry(const Message *response) {
     const char *prefix = (response->username[0] == '@') ? "" : "@";
     size_t username_len = bounded_strlen(response->username, USER_SIZE);
@@ -145,10 +138,24 @@ static void print_feed_entry(const Message *response) {
            response->content);
 }
 
+static void print_notification(const Message *response) {
+    const char *prefix = (response->username[0] == '@') ? "" : "@";
+    size_t username_len = bounded_strlen(response->username, USER_SIZE);
+    size_t content_len = bounded_strlen(response->content, CONTENT_SIZE);
+
+    printf("[NOTIFICATION] %s%.*s: \"%.*s\"\n",
+           prefix,
+           (int)username_len,
+           response->username,
+           (int)content_len,
+           response->content);
+}
+
 static int handle_read_response(int sock) {
     for (;;) {
         Message response;
         int status = recv_all(sock, &response, sizeof(response));
+
         if (status != 0) {
             return status;
         }
@@ -156,14 +163,26 @@ static int handle_read_response(int sock) {
         if (response.type == MSG_END) {
             return 0;
         }
-        if (response.type == MSG_READ) {
+
+        if (response.type == MSG_PUSH) {
             print_feed_entry(&response);
-            continue;
-        }
-        if (response.type == MSG_POST || response.type == MSG_PUSH) {
-            print_message_content(&response);
         }
     }
+}
+
+static int handle_server_message(int sock) {
+    Message response;
+    int status = recv_all(sock, &response, sizeof(response));
+
+    if (status != 0) {
+        return status;
+    }
+
+    if (response.type == MSG_PUSH) {
+        print_notification(&response);
+    }
+
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -239,33 +258,30 @@ int main(int argc, char **argv) {
     printf("Conectado ao servidor como %s\n", username);
 
     char buffer[BUFFER_SIZE];
+
+    printf("Comandos: FOLLOW <usuario>, POST <mensagem>, READ\n");
+    printf("> ");
+    fflush(stdout);
+
     while (1) {
-        printf("Comandos: FOLLOW <usuario>, POST <mensagem>, READ\n");
-        printf("> ");
-        fflush(stdout);
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(STDIN_FILENO, &read_fds);
+        FD_SET(sock, &read_fds);
 
-        if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
-            break;
-        }
-        buffer[strcspn(buffer, "\r\n")] = '\0';
-        if (buffer[0] == '\0') {
-            continue;
-        }
+        int max_fd = (sock > STDIN_FILENO) ? sock : STDIN_FILENO;
 
-        Message msg;
-        memset(&msg, 0, sizeof(msg));
-        if (parse_command_line(buffer, &msg) != 0) {
-            continue;
-        }
-        strncpy(msg.username, username, USER_SIZE - 1);
-
-        if (send_all(sock, &msg, sizeof(msg)) < 0) {
-            perror("send");
+        int ready = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("select");
             break;
         }
 
-        if (msg.type == MSG_READ) {
-            int status = handle_read_response(sock);
+        if (FD_ISSET(sock, &read_fds)) {
+            int status = handle_server_message(sock);
             if (status == 1) {
                 break;
             }
@@ -273,21 +289,53 @@ int main(int argc, char **argv) {
                 perror("recv");
                 break;
             }
-            continue;
+
+            printf("> ");
+            fflush(stdout);
         }
 
-        Message response;
-        int status = recv_all(sock, &response, sizeof(response));
-        if (status == 1) {
-            break;
-        }
-        if (status < 0) {
-            perror("recv");
-            break;
-        }
+        if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+            if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+                break;
+            }
 
-        if (response.type == MSG_POST || response.type == MSG_PUSH) {
-            print_message_content(&response);
+            buffer[strcspn(buffer, "\r\n")] = '\0';
+
+            if (buffer[0] == '\0') {
+                printf("> ");
+                fflush(stdout);
+                continue;
+            }
+
+            Message msg;
+            memset(&msg, 0, sizeof(msg));
+
+            if (parse_command_line(buffer, &msg) != 0) {
+                printf("> ");
+                fflush(stdout);
+                continue;
+            }
+
+            strncpy(msg.username, username, USER_SIZE - 1);
+
+            if (send_all(sock, &msg, sizeof(msg)) < 0) {
+                perror("send");
+                break;
+            }
+
+            if (msg.type == MSG_READ) {
+                int status = handle_read_response(sock);
+                if (status == 1) {
+                    break;
+                }
+                if (status < 0) {
+                    perror("recv");
+                    break;
+                }
+            }
+
+            printf("> ");
+            fflush(stdout);
         }
     }
 

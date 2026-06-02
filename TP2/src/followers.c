@@ -53,6 +53,10 @@ int followers_add(Followers *followers, const char *user, const char *follower) 
         return -1;
     }
 
+    if (strncmp(normalized_user, normalized_follower, USER_SIZE) == 0) {
+        return 1;
+    }
+
     int index = find_user_index(followers, normalized_user);
     if (index < 0) {
         if (followers->count >= FOLLOWERS_MAX_USERS) {

@@ -17,6 +17,12 @@
 
 #define BACKLOG 16
 #define FEED_READ_LIMIT 5
+#define ACTIVE_CLIENTS_MAX 64
+
+typedef struct {
+    int fd;
+    char username[USER_SIZE];
+} ActiveClient;
 
 typedef struct {
     int client_fd;
@@ -28,6 +34,9 @@ static pthread_mutex_t feed_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t feed_next_id = 1;
 static Followers followers;
 static pthread_mutex_t followers_mutex = PTHREAD_MUTEX_INITIALIZER;
+static ActiveClient active_clients[ACTIVE_CLIENTS_MAX];
+static size_t active_clients_count = 0;
+static pthread_mutex_t active_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int send_all(int fd, const void *buffer, size_t length) {
     const char *data = buffer;
@@ -68,6 +77,38 @@ static int recv_all(int fd, void *buffer, size_t length) {
     return 0;
 }
 
+static void active_clients_add(int fd, const char *username) {
+    pthread_mutex_lock(&active_clients_mutex);
+
+    if (active_clients_count < ACTIVE_CLIENTS_MAX) {
+        active_clients[active_clients_count].fd = fd;
+        const char *normalized = username;
+        while (*normalized == '@') {
+            normalized++;
+        }
+
+        strncpy(active_clients[active_clients_count].username, normalized, USER_SIZE - 1);
+        active_clients[active_clients_count].username[USER_SIZE - 1] = '\0';
+        active_clients_count++;
+    }
+
+    pthread_mutex_unlock(&active_clients_mutex);
+}
+
+static void active_clients_remove(int fd) {
+    pthread_mutex_lock(&active_clients_mutex);
+
+    for (size_t i = 0; i < active_clients_count; i++) {
+        if (active_clients[i].fd == fd) {
+            active_clients[i] = active_clients[active_clients_count - 1];
+            active_clients_count--;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&active_clients_mutex);
+}
+
 static size_t bounded_strlen(const char *value, size_t max_len) {
     size_t len = 0;
 
@@ -78,7 +119,7 @@ static size_t bounded_strlen(const char *value, size_t max_len) {
     return len;
 }
 
-static void store_post(const char *username, const Message *message) {
+static FeedEntry store_post(const char *username, const Message *message) {
     FeedEntry entry;
     memset(&entry, 0, sizeof(entry));
     entry.msg_id = feed_next_id++;
@@ -96,6 +137,48 @@ static void store_post(const char *username, const Message *message) {
            entry.msg_id,
            (int)content_len,
            entry.content);
+    return entry;
+}
+
+static void send_push_to_followers(const FeedEntry *entry) {
+    const FollowersEntry *followers_entry = NULL;
+
+    pthread_mutex_lock(&followers_mutex);
+    followers_entry = followers_get(&followers, entry->username);
+
+    if (followers_entry == NULL) {
+        pthread_mutex_unlock(&followers_mutex);
+        return;
+    }
+
+    char followers_snapshot[FOLLOWERS_MAX_PER_USER][USER_SIZE];
+    size_t follower_count = followers_entry->follower_count;
+
+    for (size_t i = 0; i < follower_count; i++) {
+        memcpy(followers_snapshot[i], followers_entry->followers[i], USER_SIZE);
+    }
+
+    pthread_mutex_unlock(&followers_mutex);
+
+    Message push;
+    memset(&push, 0, sizeof(push));
+    push.type = MSG_PUSH;
+    push.msg_id = entry->msg_id;
+    memcpy(push.username, entry->username, USER_SIZE);
+    memcpy(push.content, entry->content, CONTENT_SIZE);
+
+    pthread_mutex_lock(&active_clients_mutex);
+
+    for (size_t i = 0; i < active_clients_count; i++) {
+        for (size_t j = 0; j < follower_count; j++) {
+            if (strncmp(active_clients[i].username, followers_snapshot[j], USER_SIZE) == 0) {
+                send_all(active_clients[i].fd, &push, sizeof(push));
+                break;
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&active_clients_mutex);
 }
 
 static size_t feed_snapshot(FeedEntry *entries, size_t max_entries) {
@@ -129,7 +212,7 @@ static int send_feed_entries(int client_fd) {
         const FeedEntry *entry = &entries[i - 1];
         Message response;
         memset(&response, 0, sizeof(response));
-        response.type = MSG_READ;
+        response.type = MSG_PUSH;
         response.msg_id = entry->msg_id;
         memcpy(response.username, entry->username, USER_SIZE);
         response.username[USER_SIZE - 1] = '\0';
@@ -154,16 +237,17 @@ static int send_feed_entries(int client_fd) {
 static int handle_message(int client_fd, const char *username, const Message *message) {
     if (message->type == MSG_POST) {
         pthread_mutex_lock(&feed_mutex);
-        store_post(username, message);
+        FeedEntry entry = store_post(username, message);
         pthread_mutex_unlock(&feed_mutex);
-        return send_all(client_fd, message, sizeof(*message));
+        send_push_to_followers(&entry);
+        return 0;
     }
 
     if (message->type == MSG_FOLLOW) {
         pthread_mutex_lock(&followers_mutex);
         followers_add(&followers, message->content, username);
         pthread_mutex_unlock(&followers_mutex);
-        return send_all(client_fd, message, sizeof(*message));
+        return 0;
     }
 
     if (message->type == MSG_READ) {
@@ -191,6 +275,8 @@ static void *client_thread(void *arg) {
     username[USER_SIZE] = '\0';
     printf("[CONN] %s%s conectou.\n", (username[0] == '@') ? "" : "@", username);
 
+    active_clients_add(client_fd, username);
+
     if (message.type != MSG_CONNECT) {
         if (handle_message(client_fd, username, &message) < 0) {
             perror("send");
@@ -215,6 +301,7 @@ static void *client_thread(void *arg) {
         }
     }
 
+    active_clients_remove(client_fd);
     close(client_fd);
     printf("[DISC] %s%s desconectou.\n", (username[0] == '@') ? "" : "@", username);
     return NULL;
@@ -279,7 +366,7 @@ int server_run(ServerProtocol protocol, uint16_t port) {
     }
 
     signal(SIGPIPE, SIG_IGN);
-    printf("Aguardando conexoes na porta %u\n", port);
+    printf("Aguardando conexoes na porta %u.\n", port);
 
     for (;;) {
         struct sockaddr_storage client_addr;
