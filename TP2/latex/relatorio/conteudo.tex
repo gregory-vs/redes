@@ -1,68 +1,33 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Introdução}
 
-Este trabalho tem como objetivo apresentar o desenvolver um sistema de quebra de senhas (Codebreaker) baseado
-na mecânica de tentativa e erro com feedback posicional, utilizando conceitos de redes de computadores, com foco no modelo cliente-servidor via sockets TCP. A implementação foi realizada com base em boas práticas de engenharia de software, buscando garantir clareza, organização e corretude no funcionamento do sistema.
+Este trabalho tem como objetivo apresentar o desenvolvimento do Arianagram, uma rede social minimalista baseada no modelo cliente-servidor, utilizando comunicação via sockets TCP e suporte a múltiplas conexões simultâneas. A proposta central do sistema é permitir que diferentes usuários se conectem a um servidor, publiquem mensagens, sigam outros usuários e recebam notificações em tempo real quando os perfis acompanhados realizarem novas postagens.
 
-Ao longo do projeto, fora utilizada a implementação de protocolos de comunicação, além de conhecimentos teóricos e práticos relacionados à modelagem do problema, definição de arquitetura, implementação e validação da solução. Além disso, aspectos como tratamento de erros, padronização de comunicação e robustez do sistema foram considerados durante o desenvolvimento.
+A implementação foi desenvolvida em linguagem C, utilizando a interface POSIX para comunicação em rede e a biblioteca `pthread` para gerenciamento de múltiplas threads. O servidor segue a arquitetura Single-Process, Multi-Thread, na qual um processo principal permanece aguardando novas conexões e, a cada cliente conectado, cria uma thread dedicada para tratar suas mensagens durante toda a sessão.
+
+Além da comunicação tradicional entre cliente e servidor, o projeto também explora o paradigma Publish-Subscribe. Nesse modelo, os usuários podem se inscrever para acompanhar postagens de outros perfis, enquanto o servidor atua como intermediador responsável por armazenar as publicações, controlar a relação entre usuários seguidos e seguidores, e encaminhar notificações push para os clientes conectados.
+
+Ao longo do desenvolvimento, foram aplicados conceitos importantes de redes de computadores, como criação e configuração de sockets TCP, uso de IPv4 e IPv6, envio e recebimento de mensagens binárias de tamanho fixo, tratamento de conexões encerradas, sincronização de estruturas compartilhadas e comunicação assíncrona entre servidor e clientes.
 
 \section{Arquitetura do Sistema}
 
 \subsection{Visão Geral}
 
-O sistema desenvolvido segue o modelo arquitetural cliente-servidor, no qual duas entidades distintas se comunicam por meio de uma rede para a troca de informações. Nesse modelo, o servidor é responsável por centralizar a lógica da aplicação e processar as requisições recebidas, enquanto o cliente atua como interface de interação com o usuário, enviando solicitações e exibindo os resultados retornados.
+O sistema desenvolvido segue o modelo cliente-servidor, utilizando sockets TCP para permitir a comunicação entre os usuários e o servidor central. O servidor concentra a lógica principal da aplicação, enquanto os clientes funcionam como interface de interação, enviando comandos e exibindo mensagens recebidas.
 
-Como foi solicitado pelo enunciado, utilizamos o protocolo TCP para estabelecer a comunicação entre os módulos. O TCP (Transmission Control Protocol) é um protocolo de transporte de mensagens utilizado para garantir que os dados sejam entregues de forma fidedigna e ordenada. No nosso sistema, a utilização desse protocolo se mostrou imprescindível para garantir a integridade das mensagens trocadas, levando em consideração que manter a completude do conteúdo das mensagens é essencial para o correto funcionamento do sistema de quebra de senhas.
+A arquitetura do servidor segue o modelo Single-Process, Multi-Thread. O processo principal permanece aguardando novas conexões e, a cada cliente conectado, cria uma thread dedicada para atender aquela sessão. Isso permite que múltiplos usuários interajam simultaneamente com o sistema.
 
-O fluxo da comunicação entre o cliente e o servidor é estruturado da seguinte forma:
-\begin{itemize}
-    \item O cliente inicia a comunicação enviando uma mensagem de requisição ao servidor, contendo a tentativa de senha a ser verificada.
-    \item O servidor recebe a mensagem, processa a tentativa de senha e gera um feedback posicional, indicando quais caracteres estão corretos e em suas posições corretas.
-    \item O servidor envia o feedback de volta ao cliente, que o exibe para o usuário, permitindo que ele faça novas tentativas com base nas informações recebidas.
-    
-\end{itemize}
+Além do fluxo tradicional de requisição e resposta, o Arianagram também implementa notificações push. Assim, quando um usuário publica uma mensagem, o servidor verifica seus seguidores ativos e envia a postagem diretamente para os clientes conectados que seguem aquele perfil.
 
 \subsection{Estrutura dos componentes}
 
 \subsubsection{Servidor}
 
-O servidor ficou responsável por receber as mensagens de requisição do cliente, processar as tentativas de senha e enviar os feedbacks correspondentes. Ele é implementado utilizando sockets TCP para estabelecer a comunicação com o cliente.
+O servidor é responsável por criar e configurar o socket TCP, associá-lo a uma porta com \texttt{bind()}, colocá-lo em modo de escuta com listen() e aceitar conexões com accept(). Para cada novo cliente, é criada uma thread com pthread_create().
 
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.8\textwidth]{tcp_servidor.png}
-  \caption{Definição de protocolo de comunicação utilizando TCP pelo servidor.}
-  \label{fig:tcp_servidor}
-\end{figure}
+Durante a execução, o servidor mantém três estruturas principais: o feed global de mensagens, a tabela de seguidores e a lista de clientes ativos. Essas estruturas permitem armazenar posts, registrar relações de FOLLOW e localizar os sockets dos usuários conectados para envio de MSG_PUSH.
 
-Na imagem anterior, pode ser observado a utilização das constantes \texttt{AF\_INET} e \texttt{SOCK\_STREAM} para configurar o socket TCP. Essas constantes são interpretadas a partir do método sock(), da biblioteca \texttt{\#include <sys/socket.h>}, garantindo a correta configuração do socket para a comunicação TCP.
-
-O servidor foi projetado utilizando o conceito de \texttt{passive open}, em que a sequencia para aceite da conexão é realizada por meio dos métodos \texttt{bind()}, \texttt{listen()} e \texttt{accept()}. 
-
-O método \texttt{bind()} é utilizado para associar o socket a um endereço IP e porta específicos, permitindo que o servidor escute por conexões nessa porta. O método \texttt{listen()} é chamado para colocar o servidor em modo de escuta, aguardando por conexões de clientes. Por fim, o método \texttt{accept()} é utilizado para aceitar uma conexão de um cliente, retornando um novo socket específico para essa conexão.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.6\textwidth]{bind_servidor.png}
-  \caption{Definição do bind no servidor.}
-  \label{fig:bind_servidor}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.6\textwidth]{listen_servidor.png}
-  \caption{Definição do listen no servidor.}
-  \label{fig:listen_servidor}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.8\textwidth]{accept_servidor.png}
-  \caption{Definição do accept no servidor.}
-  \label{fig:accept_servidor}
-\end{figure}
-
-Por fim, após a definição do protocolo de comunicação e a configuração do servidor para aceitar conexões, o servidor entra em um loop de processamento, onde aguarda por mensagens de requisição do cliente, processa as tentativas de senha e envia os feedbacks correspondentes. Esse processo se utiliza do método \texttt{validate\_pass()} , que é responsável por comparar a tentativa de senha recebida com a senha correta e gerar o feedback posicional adequado.
+Como essas informações são compartilhadas entre diferentes threads, o acesso a elas é protegido com mutexes, evitando inconsistências causadas por acessos concorrentes.
 
 \subsubsection{Cliente}
 
