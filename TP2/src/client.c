@@ -9,9 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <sys/select.h>
 
 #include "protocol.h"
 
@@ -68,6 +68,22 @@ static int recv_all(int fd, void *buffer, size_t length) {
     return 0;
 }
 
+static void message_to_network_order(Message *message) {
+    message->type = htons(message->type);
+    message->msg_id = htonl(message->msg_id);
+}
+
+static void message_to_host_order(Message *message) {
+    message->type = ntohs(message->type);
+    message->msg_id = ntohl(message->msg_id);
+}
+
+static int send_message(int fd, const Message *message) {
+    Message network_message = *message;
+    message_to_network_order(&network_message);
+    return send_all(fd, &network_message, sizeof(network_message));
+}
+
 static size_t bounded_strlen(const char *value, size_t max_len) {
     size_t len = 0;
 
@@ -82,6 +98,7 @@ static char *skip_spaces(char *value) {
     while (*value == ' ' || *value == '\t') {
         value++;
     }
+
     return value;
 }
 
@@ -98,21 +115,27 @@ static int parse_command_line(char *line, Message *msg) {
 
     if (strcasecmp(command, "FOLLOW") == 0) {
         msg->type = MSG_FOLLOW;
+
         if (argument == NULL || *argument == '\0') {
             fprintf(stderr, "Uso: FOLLOW <usuario>\n");
             return -1;
         }
+
         strncpy(msg->content, argument, CONTENT_SIZE - 1);
+        msg->content[CONTENT_SIZE - 1] = '\0';
         return 0;
     }
 
     if (strcasecmp(command, "POST") == 0) {
         msg->type = MSG_POST;
+
         if (argument == NULL || *argument == '\0') {
             fprintf(stderr, "Uso: POST <mensagem>\n");
             return -1;
         }
+
         strncpy(msg->content, argument, CONTENT_SIZE - 1);
+        msg->content[CONTENT_SIZE - 1] = '\0';
         return 0;
     }
 
@@ -129,6 +152,7 @@ static void print_feed_entry(const Message *response) {
     const char *prefix = (response->username[0] == '@') ? "" : "@";
     size_t username_len = bounded_strlen(response->username, USER_SIZE);
     size_t content_len = bounded_strlen(response->content, CONTENT_SIZE);
+
     printf("[FEED] ID %u | %s%.*s: \"%.*s\"\n",
            response->msg_id,
            prefix,
@@ -160,6 +184,8 @@ static int handle_read_response(int sock) {
             return status;
         }
 
+        message_to_host_order(&response);
+
         if (response.type == MSG_END) {
             return 0;
         }
@@ -178,6 +204,8 @@ static int handle_server_message(int sock) {
         return status;
     }
 
+    message_to_host_order(&response);
+
     if (response.type == MSG_PUSH) {
         print_notification(&response);
     }
@@ -193,9 +221,9 @@ int main(int argc, char **argv) {
 
     const char *ip = argv[1];
     const char *port_str = argv[2];
-    uint16_t port = parse_port(port_str);
     const char *username = argv[3];
 
+    uint16_t port = parse_port(port_str);
     if (port == 0) {
         return 1;
     }
@@ -207,6 +235,7 @@ int main(int argc, char **argv) {
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
+
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
@@ -219,6 +248,7 @@ int main(int argc, char **argv) {
 
     int sock = -1;
     int last_errno = 0;
+
     for (struct addrinfo *rp = result; rp != NULL; rp = rp->ai_next) {
         sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (sock < 0) {
@@ -241,29 +271,33 @@ int main(int argc, char **argv) {
         if (last_errno != 0) {
             errno = last_errno;
         }
+
         perror("connect");
         return 1;
     }
 
     Message connect_msg;
     memset(&connect_msg, 0, sizeof(connect_msg));
+
     connect_msg.type = MSG_CONNECT;
+    connect_msg.msg_id = 0;
     strncpy(connect_msg.username, username, USER_SIZE - 1);
-    if (send_all(sock, &connect_msg, sizeof(connect_msg)) < 0) {
+    connect_msg.username[USER_SIZE - 1] = '\0';
+
+    if (send_message(sock, &connect_msg) < 0) {
         perror("send");
         close(sock);
         return 1;
     }
 
-    printf("Conectado ao servidor como %s\n", username);
+    printf("Conectado ao servidor como %s.\n", username);
 
     char buffer[BUFFER_SIZE];
 
-    printf("Comandos: FOLLOW <usuario>, POST <mensagem>, READ\n");
     printf("> ");
     fflush(stdout);
 
-    while (1) {
+    for (;;) {
         fd_set read_fds;
         FD_ZERO(&read_fds);
         FD_SET(STDIN_FILENO, &read_fds);
@@ -276,15 +310,18 @@ int main(int argc, char **argv) {
             if (errno == EINTR) {
                 continue;
             }
+
             perror("select");
             break;
         }
 
         if (FD_ISSET(sock, &read_fds)) {
             int status = handle_server_message(sock);
+
             if (status == 1) {
                 break;
             }
+
             if (status < 0) {
                 perror("recv");
                 break;
@@ -317,17 +354,21 @@ int main(int argc, char **argv) {
             }
 
             strncpy(msg.username, username, USER_SIZE - 1);
+            msg.username[USER_SIZE - 1] = '\0';
+            msg.msg_id = 0;
 
-            if (send_all(sock, &msg, sizeof(msg)) < 0) {
+            if (send_message(sock, &msg) < 0) {
                 perror("send");
                 break;
             }
 
             if (msg.type == MSG_READ) {
                 int status = handle_read_response(sock);
+
                 if (status == 1) {
                     break;
                 }
+
                 if (status < 0) {
                     perror("recv");
                     break;

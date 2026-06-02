@@ -3,53 +3,91 @@
 
 Este trabalho tem como objetivo apresentar o desenvolvimento do Arianagram, uma rede social minimalista baseada no modelo cliente-servidor, utilizando comunicação via sockets TCP e suporte a múltiplas conexões simultâneas. A proposta central do sistema é permitir que diferentes usuários se conectem a um servidor, publiquem mensagens, sigam outros usuários e recebam notificações em tempo real quando os perfis acompanhados realizarem novas postagens.
 
-A implementação foi desenvolvida em linguagem C, utilizando a interface POSIX para comunicação em rede e a biblioteca `pthread` para gerenciamento de múltiplas threads. O servidor segue a arquitetura Single-Process, Multi-Thread, na qual um processo principal permanece aguardando novas conexões e, a cada cliente conectado, cria uma thread dedicada para tratar suas mensagens durante toda a sessão.
-
-Além da comunicação tradicional entre cliente e servidor, o projeto também explora o paradigma Publish-Subscribe. Nesse modelo, os usuários podem se inscrever para acompanhar postagens de outros perfis, enquanto o servidor atua como intermediador responsável por armazenar as publicações, controlar a relação entre usuários seguidos e seguidores, e encaminhar notificações push para os clientes conectados.
-
 Ao longo do desenvolvimento, foram aplicados conceitos importantes de redes de computadores, como criação e configuração de sockets TCP, uso de IPv4 e IPv6, envio e recebimento de mensagens binárias de tamanho fixo, tratamento de conexões encerradas, sincronização de estruturas compartilhadas e comunicação assíncrona entre servidor e clientes.
 
 \section{Arquitetura do Sistema}
 
 \subsection{Visão Geral}
 
-O sistema desenvolvido segue o modelo cliente-servidor, utilizando sockets TCP para permitir a comunicação entre os usuários e o servidor central. O servidor concentra a lógica principal da aplicação, enquanto os clientes funcionam como interface de interação, enviando comandos e exibindo mensagens recebidas.
+Nesse sistema, o servidor concentra a lógica principal da aplicação, enquanto os clientes funcionam como interface de interação, enviando comandos e exibindo mensagens recebidas.
 
 A arquitetura do servidor segue o modelo Single-Process, Multi-Thread. O processo principal permanece aguardando novas conexões e, a cada cliente conectado, cria uma thread dedicada para atender aquela sessão. Isso permite que múltiplos usuários interajam simultaneamente com o sistema.
 
-Além do fluxo tradicional de requisição e resposta, o Arianagram também implementa notificações push. Assim, quando um usuário publica uma mensagem, o servidor verifica seus seguidores ativos e envia a postagem diretamente para os clientes conectados que seguem aquele perfil.
+Além do fluxo tradicional de requisição e resposta, o Arianagram também implementa notificações push, explorando o paradigma Publish-Subscribe. Assim, quando um usuário publica uma mensagem, o servidor verifica seus seguidores ativos e envia a postagem diretamente para os clientes conectados que seguem aquele perfil.
 
-\subsection{Estrutura dos componentes}
+\subsection{Estruturas de Dados}
 
-\subsubsection{Servidor}
+No servidor, foram utilizadas estruturas de dados simples para armazenar as informações necessárias ao funcionamento do sistema. As principais estruturas estão relacionadas ao feed global de mensagens e ao controle de seguidores.
 
-O servidor é responsável por criar e configurar o socket TCP, associá-lo a uma porta com \texttt{bind()}, colocá-lo em modo de escuta com listen() e aceitar conexões com accept(). Para cada novo cliente, é criada uma thread com pthread_create().
+A estrutura do feed, implementada em \texttt{feed.c}, funciona como um buffer circular. Ela armazena as mensagens publicadas pelos usuários, mantendo um contador de mensagens válidas e uma posição inicial para indicar a mensagem mais antiga. Quando o limite de armazenamento é atingido, as mensagens mais antigas passam a ser sobrescritas pelas novas publicações. Essa abordagem permite manter o histórico recente de mensagens de forma simples e eficiente.
 
-Durante a execução, o servidor mantém três estruturas principais: o feed global de mensagens, a tabela de seguidores e a lista de clientes ativos. Essas estruturas permitem armazenar posts, registrar relações de FOLLOW e localizar os sockets dos usuários conectados para envio de MSG_PUSH.
+Já a estrutura de seguidores, implementada em \texttt{followers.c}, mantém a relação entre usuários seguidos e seus respectivos seguidores. Para cada usuário, é armazenada uma lista de perfis que o seguem. Assim, quando um usuário realiza uma postagem, o servidor consulta essa estrutura para identificar quais clientes devem receber uma notificação \texttt{MSG\_PUSH}.
 
-Como essas informações são compartilhadas entre diferentes threads, o acesso a elas é protegido com mutexes, evitando inconsistências causadas por acessos concorrentes.
+Além disso, os nomes de usuário são normalizados antes do armazenamento, removendo o caractere @. Essa decisão facilita as comparações entre usuários e também permite tratar corretamente casos como seguidores duplicados e auto-follow, que são ignorados silenciosamente pelo sistema.
 
-\subsubsection{Cliente}
+\subsection{Funcionamento da Thread no Servidor}
 
-Já para o cliente, a implementação se torna bem mais simplificada, utilizando apenas o método \texttt{connect()} para estabelecer a conexão com o servidor, e os métodos \texttt{send()} e \texttt{recv()} para enviar as tentativas de senha e receber os feedbacks do servidor, respectivamente, se aproveitando da struct \texttt{HackerMessage} para padronizar o formato das mensagens trocadas entre o cliente e o servidor e garantir a integridade dos dados transmitidos.
+A arquitetura do servidor segue o modelo Single-Process, Multi-Thread. O processo principal permanece aguardando conexões e, sempre que um novo cliente é aceito com \texttt{accept()}, cria uma thread dedicada para atender aquela conexão.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.8\textwidth]{hacker_msg_client.png}
-  \caption{Definição da variável de armazenamento da mensagem de requisição do cliente.}
-  \label{fig:hacker_msg_cliente}
+  \includegraphics[width=0.8\textwidth]{thread_life_cycle.png}
+  \caption{Ciclo de vida de uma thread no servidor}
+  \label{fig:thread_life_cycle}
 \end{figure}
+
+O uso de \texttt{pthread\_detach()} permite que os recursos da thread sejam liberados automaticamente ao final da execução, sem a necessidade de utilizar \texttt{pthread\_join()} no processo principal.
+
+Dentro da função \texttt{client\_thread}, a thread recebe inicialmente a mensagem \texttt{MSG\_CONNECT}, enviada pelo cliente logo após a conexão. A partir dessa mensagem, o servidor identifica o usuário conectado e registra esse cliente na lista de clientes ativos.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{client_connected.png}
+  \caption{Lista de clientes ativos no servidor}
+  \label{fig:active_clients}
+\end{figure}
+
+Depois do handshake, a thread entra em um loop de processamento, permanecendo ativa enquanto a conexão com o cliente estiver aberta. Nesse loop, cada mensagem recebida é enviada para \texttt{handle\_message()}, que trata comandos como \texttt{MSG\_POST}, \texttt{MSG\_FOLLOW} e \texttt{MSG\_READ}.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{message_handle.png}
+  \caption{Processo de leitura de mensagens}
+  \label{fig:leitura_mensagens}
+\end{figure}
+
+No caso de uma mensagem \texttt{MSG\_POST}, a thread armazena a publicação no feed global e aciona o envio de notificações push para os seguidores ativos daquele usuário.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{post_store.png}
+  \caption{Processo de leitura de armazenamento e push de postagens}
+  \label{fig:armazenamento_push}
+\end{figure}
+
+Quando o cliente encerra a conexão, \texttt{recv\_all()} detecta o fechamento do socket, a thread sai do loop, remove o cliente da lista de ativos, fecha o socket e finaliza sua execução.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{close_thread.png}
+  \caption{Fechamento da thread}
+  \label{fig:fechamento_thread}
+\end{figure}
+
+Assim, o ciclo de vida da thread pode ser resumido em: criação após \texttt{accept()}, identificação do cliente via \texttt{MSG\_CONNECT}, registro como cliente ativo, processamento dos comandos recebidos e limpeza dos recursos ao final da conexão.
 
 \section{Desafios e Dificuldades}
 
-Durante o desenvolvimento do sistema, foram enfrentados alguns desafios e dificuldades, principalmente relacionados à implementação da comunicação via sockets TCP e ao tratamento de erros. Num primeiro momento, o entendimento do modelo cliente-servidor e a configuração correta dos sockets se mostrou um desafio, exigindo uma compreensão aprofundada dos conceitos de redes de computadores e do funcionamento dos protocolos de comunicação. 
+O principal desafio desse sistema ocorreu principalmente no envio de pushes para permitir que uma thread enviasse mensagens para sockets associados a outros clientes. Quando um usuário realiza um \texttt{MSG\_POST}, a thread responsável por essa conexão precisa identificar quais seguidores estão ativos e encaminhar uma mensagem \texttt{MSG\_PUSH} diretamente para os sockets correspondentes.
 
-A pouca prática prévia relacionada à programação em C e à utilização de sockets também contribuiu para a dificuldade inicial, demandando um esforço adicional para aprender e aplicar esses conceitos de forma eficaz. 
+Para isso, foi necessário manter uma lista de clientes ativos, relacionando cada usuário conectado ao seu socket. Além disso, como essa lista, o feed global e a tabela de seguidores são compartilhados entre múltiplas threads, foi necessário proteger o acesso a essas estruturas com mutexes, evitando inconsistências causadas por acessos concorrentes.
 
-No entanto, após superados os desafios, a fase de padronização das mensagens utilizando o protocolo previamente definido, também gerou uma certa dificuldade inicial, que foi superada com uma maior rapidez do que a fase de implementação da comunicação via sockets TCP, devido à experiência adquirida durante o desenvolvimento do projeto. Entretanto, mesmo com uma certa dificuldade inicial, foi interessante entender a importância de padronizar as mensagens, fazendo com que o restante do desenvolvimento se mostrasse mais tranquilo e fluído.
+Outro ponto importante foi tratar corretamente desconexões. Quando um cliente encerra a conexão, ele deve ser removido da lista de ativos para impedir que o servidor tente enviar pushes para sockets inválidos.
 
-Por fim, garantimos a roubustez do sistema por meio de um tratamento de erros adequado, utilizando mensagens de erros claras e informativas para o usuário, além de implementar mecanismos de validação para garantir a integridade dos dados transmitidos e recebidos.
+Por fim, no lado do cliente, foi utilizado \texttt{select()} para monitorar simultaneamente o teclado e o socket, permitindo que notificações \texttt{MSG\_PUSH} fossem recebidas de forma assíncrona, mesmo quando o usuário não estivesse digitando comandos.
 
 \section{Conclusão}
 
-Assim, concluímos que esse projeto permitiu a aplicação prática de conceitos de redes de computadores, programação em C e desenvolvimento de sistemas utilizando o modelo cliente-servidor. A implementação do sistema \texttt{Codebreaker} proporcionou um estudo claro e conciso sobre a comunicação via sockets TCP.
+Assim, concluímos que este projeto permitiu a aplicação prática de conceitos de redes de computadores, programação em C e desenvolvimento de sistemas baseados no modelo cliente-servidor. A implementação do sistema \texttt{Arianagram} proporcionou um estudo mais aprofundado sobre comunicação via sockets TCP, múltiplas conexões simultâneas, uso de threads e sincronização de estruturas compartilhadas.
+
+Além disso, o projeto possibilitou compreender melhor o funcionamento de um sistema baseado em Publish-Subscribe, no qual o servidor não apenas responde às requisições dos clientes, mas também envia notificações assíncronas por meio de mensagens \texttt{MSG\_PUSH}. Dessa forma, o desenvolvimento contribuiu para consolidar conhecimentos sobre concorrência, gerenciamento de conexões e comunicação em tempo real entre processos distribuídos.

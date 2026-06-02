@@ -32,8 +32,10 @@ typedef struct {
 static Feed feed;
 static pthread_mutex_t feed_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t feed_next_id = 1;
+
 static Followers followers;
 static pthread_mutex_t followers_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 static ActiveClient active_clients[ACTIVE_CLIENTS_MAX];
 static size_t active_clients_count = 0;
 static pthread_mutex_t active_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -77,11 +79,28 @@ static int recv_all(int fd, void *buffer, size_t length) {
     return 0;
 }
 
+static void message_to_network_order(Message *message) {
+    message->type = htons(message->type);
+    message->msg_id = htonl(message->msg_id);
+}
+
+static void message_to_host_order(Message *message) {
+    message->type = ntohs(message->type);
+    message->msg_id = ntohl(message->msg_id);
+}
+
+static int send_message(int fd, const Message *message) {
+    Message network_message = *message;
+    message_to_network_order(&network_message);
+    return send_all(fd, &network_message, sizeof(network_message));
+}
+
 static void active_clients_add(int fd, const char *username) {
     pthread_mutex_lock(&active_clients_mutex);
 
     if (active_clients_count < ACTIVE_CLIENTS_MAX) {
         active_clients[active_clients_count].fd = fd;
+
         const char *normalized = username;
         while (*normalized == '@') {
             normalized++;
@@ -122,8 +141,11 @@ static size_t bounded_strlen(const char *value, size_t max_len) {
 static FeedEntry store_post(const char *username, const Message *message) {
     FeedEntry entry;
     memset(&entry, 0, sizeof(entry));
+
     entry.msg_id = feed_next_id++;
     strncpy(entry.username, username, USER_SIZE - 1);
+    entry.username[USER_SIZE - 1] = '\0';
+
     memcpy(entry.content, message->content, CONTENT_SIZE);
     entry.content[CONTENT_SIZE - 1] = '\0';
 
@@ -131,21 +153,21 @@ static FeedEntry store_post(const char *username, const Message *message) {
 
     const char *prefix = (entry.username[0] == '@') ? "" : "@";
     size_t content_len = bounded_strlen(entry.content, CONTENT_SIZE);
+
     printf("[LOG] %s%s posted (ID %u): \"%.*s\"\n",
            prefix,
            entry.username,
            entry.msg_id,
            (int)content_len,
            entry.content);
+
     return entry;
 }
 
 static void send_push_to_followers(const FeedEntry *entry) {
-    const FollowersEntry *followers_entry = NULL;
-
     pthread_mutex_lock(&followers_mutex);
-    followers_entry = followers_get(&followers, entry->username);
 
+    const FollowersEntry *followers_entry = followers_get(&followers, entry->username);
     if (followers_entry == NULL) {
         pthread_mutex_unlock(&followers_mutex);
         return;
@@ -162,6 +184,7 @@ static void send_push_to_followers(const FeedEntry *entry) {
 
     Message push;
     memset(&push, 0, sizeof(push));
+
     push.type = MSG_PUSH;
     push.msg_id = entry->msg_id;
     memcpy(push.username, entry->username, USER_SIZE);
@@ -172,7 +195,7 @@ static void send_push_to_followers(const FeedEntry *entry) {
     for (size_t i = 0; i < active_clients_count; i++) {
         for (size_t j = 0; j < follower_count; j++) {
             if (strncmp(active_clients[i].username, followers_snapshot[j], USER_SIZE) == 0) {
-                send_all(active_clients[i].fd, &push, sizeof(push));
+                send_message(active_clients[i].fd, &push);
                 break;
             }
         }
@@ -186,6 +209,7 @@ static size_t feed_snapshot(FeedEntry *entries, size_t max_entries) {
     size_t start = 0;
 
     pthread_mutex_lock(&feed_mutex);
+
     total = feed_count(&feed);
     if (total > max_entries) {
         start = total - max_entries;
@@ -194,11 +218,11 @@ static size_t feed_snapshot(FeedEntry *entries, size_t max_entries) {
     size_t copied = 0;
     for (size_t i = start; i < total; i++) {
         const FeedEntry *entry = feed_get(&feed, i);
-        if (entry == NULL) {
-            continue;
+        if (entry != NULL) {
+            entries[copied++] = *entry;
         }
-        entries[copied++] = *entry;
     }
+
     pthread_mutex_unlock(&feed_mutex);
 
     return copied;
@@ -210,16 +234,20 @@ static int send_feed_entries(int client_fd) {
 
     for (size_t i = count; i > 0; i--) {
         const FeedEntry *entry = &entries[i - 1];
+
         Message response;
         memset(&response, 0, sizeof(response));
+
         response.type = MSG_PUSH;
         response.msg_id = entry->msg_id;
+
         memcpy(response.username, entry->username, USER_SIZE);
         response.username[USER_SIZE - 1] = '\0';
+
         memcpy(response.content, entry->content, CONTENT_SIZE);
         response.content[CONTENT_SIZE - 1] = '\0';
 
-        if (send_all(client_fd, &response, sizeof(response)) < 0) {
+        if (send_message(client_fd, &response) < 0) {
             return -1;
         }
     }
@@ -227,7 +255,8 @@ static int send_feed_entries(int client_fd) {
     Message end;
     memset(&end, 0, sizeof(end));
     end.type = MSG_END;
-    if (send_all(client_fd, &end, sizeof(end)) < 0) {
+
+    if (send_message(client_fd, &end) < 0) {
         return -1;
     }
 
@@ -239,6 +268,7 @@ static int handle_message(int client_fd, const char *username, const Message *me
         pthread_mutex_lock(&feed_mutex);
         FeedEntry entry = store_post(username, message);
         pthread_mutex_unlock(&feed_mutex);
+
         send_push_to_followers(&entry);
         return 0;
     }
@@ -254,7 +284,7 @@ static int handle_message(int client_fd, const char *username, const Message *me
         return send_feed_entries(client_fd);
     }
 
-    return send_all(client_fd, message, sizeof(*message));
+    return 0;
 }
 
 static void *client_thread(void *arg) {
@@ -271,15 +301,21 @@ static void *client_thread(void *arg) {
         return NULL;
     }
 
+    message_to_host_order(&message);
+
     memcpy(username, message.username, USER_SIZE);
     username[USER_SIZE] = '\0';
-    printf("[CONN] %s%s conectou.\n", (username[0] == '@') ? "" : "@", username);
+
+    printf("[CONN] %s%s conectou.\n",
+           (username[0] == '@') ? "" : "@",
+           username);
 
     active_clients_add(client_fd, username);
 
     if (message.type != MSG_CONNECT) {
         if (handle_message(client_fd, username, &message) < 0) {
             perror("send");
+            active_clients_remove(client_fd);
             close(client_fd);
             return NULL;
         }
@@ -287,13 +323,17 @@ static void *client_thread(void *arg) {
 
     for (;;) {
         status = recv_all(client_fd, &message, sizeof(message));
+
         if (status == 1) {
             break;
         }
+
         if (status < 0) {
             perror("recv");
             break;
         }
+
+        message_to_host_order(&message);
 
         if (handle_message(client_fd, username, &message) < 0) {
             perror("send");
@@ -303,15 +343,21 @@ static void *client_thread(void *arg) {
 
     active_clients_remove(client_fd);
     close(client_fd);
-    printf("[DISC] %s%s desconectou.\n", (username[0] == '@') ? "" : "@", username);
+
+    printf("[DISC] %s%s desconectou.\n",
+           (username[0] == '@') ? "" : "@",
+           username);
+
     return NULL;
 }
 
 int server_run(ServerProtocol protocol, uint16_t port) {
     feed_init(&feed);
     followers_init(&followers);
+
     int family = (protocol == SERVER_PROTOCOL_V4) ? AF_INET : AF_INET6;
     int server_fd = socket(family, SOCK_STREAM, 0);
+
     if (server_fd < 0) {
         perror("socket");
         return 1;
@@ -336,6 +382,7 @@ int server_run(ServerProtocol protocol, uint16_t port) {
     if (protocol == SERVER_PROTOCOL_V4) {
         struct sockaddr_in server_addr;
         memset(&server_addr, 0, sizeof(server_addr));
+
         server_addr.sin_family = AF_INET;
         server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
         server_addr.sin_port = htons(port);
@@ -348,6 +395,7 @@ int server_run(ServerProtocol protocol, uint16_t port) {
     } else {
         struct sockaddr_in6 server_addr;
         memset(&server_addr, 0, sizeof(server_addr));
+
         server_addr.sin6_family = AF_INET6;
         server_addr.sin6_addr = in6addr_any;
         server_addr.sin6_port = htons(port);
@@ -366,17 +414,19 @@ int server_run(ServerProtocol protocol, uint16_t port) {
     }
 
     signal(SIGPIPE, SIG_IGN);
+
     printf("Aguardando conexoes na porta %u.\n", port);
 
     for (;;) {
         struct sockaddr_storage client_addr;
         socklen_t client_len = sizeof(client_addr);
-        int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
 
+        int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
         if (client_fd < 0) {
             if (errno == EINTR) {
                 continue;
             }
+
             perror("accept");
             continue;
         }
