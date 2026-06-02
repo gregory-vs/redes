@@ -1,0 +1,55 @@
+\renewcommand{\rmdefault}{phv}
+\renewcommand{\sfdefault}{phv}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+
+\usepackage{amsmath}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{minted}
+\usepackage{fvextra}
+\setminted{
+    breaklines=true,
+    breakanywhere=true,
+    breaksymbolleft={},
+    linenos
+}
+
+\usepackage{graphicx}
+\usepackage{svg}
+\usepackage{subcaption}
+\usepackage{geometry}
+\geometry{a4paper,nohead,left=2cm,right=2cm,top=2.2cm,bottom=2cm}
+\usepackage{setspace}
+\onehalfspace
+\usepackage{indentfirst}
+\setlength{\parskip}{1em}
+
+\usepackage{multicol,multirow,booktabs,array,ltablex,threeparttablex}
+\newcommand{\PreserveBackslash}[1]{\let\temp=\\#1\let\\=\temp}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{Z}{>{\centering\arraybackslash}X}
+\newcolumntype{s}{>{\hsize=.5\hsize}Y}
+\newcolumntype{B}{>{\hsize=2\hsize}Y}
+\newcolumntype{Q}{>{\hsize=.8\hsize}Y}
+\newcolumntype{C}[1]{>{\PreserveBackslash\centering}p{#1}}
+\newcolumntype{L}[1]{>{\raggedright\let\newline\\\arraybackslash\hspace{0pt}}m{#1}}
+
+\usepackage{caption}
+\captionsetup{width=\textwidth}
+\usepackage[section]{placeins}
+\usepackage{titlesec}
+\usepackage{url}
+\usepackage{float}
+\usepackage{adjustbox}
+\usepackage{pdflscape}
+\usepackage{dirtree}
+\usepackage{comment}
+\usepackage{siunitx}
+\sisetup{locale=FR}
+
+\titlespacing*{\section}{0pt}{10pt}{0pt}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}[]
+
+\graphicspath{{imagens/}{imagens/logos/}}

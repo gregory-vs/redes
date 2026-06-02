@@ -1,0 +1,90 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introdução}
+
+Este trabalho tem como objetivo apresentar o desenvolver um sistema de quebra de senhas (Codebreaker) baseado
+na mecânica de tentativa e erro com feedback posicional, utilizando conceitos de redes de computadores, com foco no modelo cliente-servidor via sockets TCP. A implementação foi realizada com base em boas práticas de engenharia de software, buscando garantir clareza, organização e corretude no funcionamento do sistema.
+
+Ao longo do projeto, fora utilizada a implementação de protocolos de comunicação, além de conhecimentos teóricos e práticos relacionados à modelagem do problema, definição de arquitetura, implementação e validação da solução. Além disso, aspectos como tratamento de erros, padronização de comunicação e robustez do sistema foram considerados durante o desenvolvimento.
+
+\section{Arquitetura do Sistema}
+
+\subsection{Visão Geral}
+
+O sistema desenvolvido segue o modelo arquitetural cliente-servidor, no qual duas entidades distintas se comunicam por meio de uma rede para a troca de informações. Nesse modelo, o servidor é responsável por centralizar a lógica da aplicação e processar as requisições recebidas, enquanto o cliente atua como interface de interação com o usuário, enviando solicitações e exibindo os resultados retornados.
+
+Como foi solicitado pelo enunciado, utilizamos o protocolo TCP para estabelecer a comunicação entre os módulos. O TCP (Transmission Control Protocol) é um protocolo de transporte de mensagens utilizado para garantir que os dados sejam entregues de forma fidedigna e ordenada. No nosso sistema, a utilização desse protocolo se mostrou imprescindível para garantir a integridade das mensagens trocadas, levando em consideração que manter a completude do conteúdo das mensagens é essencial para o correto funcionamento do sistema de quebra de senhas.
+
+O fluxo da comunicação entre o cliente e o servidor é estruturado da seguinte forma:
+\begin{itemize}
+    \item O cliente inicia a comunicação enviando uma mensagem de requisição ao servidor, contendo a tentativa de senha a ser verificada.
+    \item O servidor recebe a mensagem, processa a tentativa de senha e gera um feedback posicional, indicando quais caracteres estão corretos e em suas posições corretas.
+    \item O servidor envia o feedback de volta ao cliente, que o exibe para o usuário, permitindo que ele faça novas tentativas com base nas informações recebidas.
+    
+\end{itemize}
+
+\subsection{Estrutura dos componentes}
+
+\subsubsection{Servidor}
+
+O servidor ficou responsável por receber as mensagens de requisição do cliente, processar as tentativas de senha e enviar os feedbacks correspondentes. Ele é implementado utilizando sockets TCP para estabelecer a comunicação com o cliente.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{tcp_servidor.png}
+  \caption{Definição de protocolo de comunicação utilizando TCP pelo servidor.}
+  \label{fig:tcp_servidor}
+\end{figure}
+
+Na imagem anterior, pode ser observado a utilização das constantes \texttt{AF\_INET} e \texttt{SOCK\_STREAM} para configurar o socket TCP. Essas constantes são interpretadas a partir do método sock(), da biblioteca \texttt{\#include <sys/socket.h>}, garantindo a correta configuração do socket para a comunicação TCP.
+
+O servidor foi projetado utilizando o conceito de \texttt{passive open}, em que a sequencia para aceite da conexão é realizada por meio dos métodos \texttt{bind()}, \texttt{listen()} e \texttt{accept()}. 
+
+O método \texttt{bind()} é utilizado para associar o socket a um endereço IP e porta específicos, permitindo que o servidor escute por conexões nessa porta. O método \texttt{listen()} é chamado para colocar o servidor em modo de escuta, aguardando por conexões de clientes. Por fim, o método \texttt{accept()} é utilizado para aceitar uma conexão de um cliente, retornando um novo socket específico para essa conexão.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\textwidth]{bind_servidor.png}
+  \caption{Definição do bind no servidor.}
+  \label{fig:bind_servidor}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\textwidth]{listen_servidor.png}
+  \caption{Definição do listen no servidor.}
+  \label{fig:listen_servidor}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{accept_servidor.png}
+  \caption{Definição do accept no servidor.}
+  \label{fig:accept_servidor}
+\end{figure}
+
+Por fim, após a definição do protocolo de comunicação e a configuração do servidor para aceitar conexões, o servidor entra em um loop de processamento, onde aguarda por mensagens de requisição do cliente, processa as tentativas de senha e envia os feedbacks correspondentes. Esse processo se utiliza do método \texttt{validate\_pass()} , que é responsável por comparar a tentativa de senha recebida com a senha correta e gerar o feedback posicional adequado.
+
+\subsubsection{Cliente}
+
+Já para o cliente, a implementação se torna bem mais simplificada, utilizando apenas o método \texttt{connect()} para estabelecer a conexão com o servidor, e os métodos \texttt{send()} e \texttt{recv()} para enviar as tentativas de senha e receber os feedbacks do servidor, respectivamente, se aproveitando da struct \texttt{HackerMessage} para padronizar o formato das mensagens trocadas entre o cliente e o servidor e garantir a integridade dos dados transmitidos.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{hacker_msg_client.png}
+  \caption{Definição da variável de armazenamento da mensagem de requisição do cliente.}
+  \label{fig:hacker_msg_cliente}
+\end{figure}
+
+\section{Desafios e Dificuldades}
+
+Durante o desenvolvimento do sistema, foram enfrentados alguns desafios e dificuldades, principalmente relacionados à implementação da comunicação via sockets TCP e ao tratamento de erros. Num primeiro momento, o entendimento do modelo cliente-servidor e a configuração correta dos sockets se mostrou um desafio, exigindo uma compreensão aprofundada dos conceitos de redes de computadores e do funcionamento dos protocolos de comunicação. 
+
+A pouca prática prévia relacionada à programação em C e à utilização de sockets também contribuiu para a dificuldade inicial, demandando um esforço adicional para aprender e aplicar esses conceitos de forma eficaz. 
+
+No entanto, após superados os desafios, a fase de padronização das mensagens utilizando o protocolo previamente definido, também gerou uma certa dificuldade inicial, que foi superada com uma maior rapidez do que a fase de implementação da comunicação via sockets TCP, devido à experiência adquirida durante o desenvolvimento do projeto. Entretanto, mesmo com uma certa dificuldade inicial, foi interessante entender a importância de padronizar as mensagens, fazendo com que o restante do desenvolvimento se mostrasse mais tranquilo e fluído.
+
+Por fim, garantimos a roubustez do sistema por meio de um tratamento de erros adequado, utilizando mensagens de erros claras e informativas para o usuário, além de implementar mecanismos de validação para garantir a integridade dos dados transmitidos e recebidos.
+
+\section{Conclusão}
+
+Assim, concluímos que esse projeto permitiu a aplicação prática de conceitos de redes de computadores, programação em C e desenvolvimento de sistemas utilizando o modelo cliente-servidor. A implementação do sistema \texttt{Codebreaker} proporcionou um estudo claro e conciso sobre a comunicação via sockets TCP.

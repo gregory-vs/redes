@@ -1,0 +1,8 @@
+ #include <stdio.h>
+
+ // Comentário de linha em C
+ int main(void) {
+     /* Comentário de bloco */
+     printf("Ola, mundo!\n");
+     return 0;
+ }

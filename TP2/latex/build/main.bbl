@@ -1,0 +1,21 @@
+\begin{thebibliography}{1}
+
+\bibitem{tp1-codebreaker-dcc-icex-ufmg}
+{DCC/ICEx/UFMG}.
+\newblock Especificação do trabalho prático 1 --- operação codebreaker.
+\newblock Documento interno, 2026.
+\newblock Material da disciplina.
+
+\bibitem{gfg-socket-programming}
+{GeeksforGeeks}.
+\newblock Socket programming in c/c++.
+\newblock \url{https://www.geeksforgeeks.org/c/socket-programming-cc/}, 2025.
+\newblock Acesso em: 22 abr. 2026.
+
+\bibitem{notasAula}
+Marcos Augusto~Menezes Vieira.
+\newblock Redes de computadores.
+\newblock Slides da disciplina DCC218 - INTRODUÇÃO A SISTEMAS COMPUTACIONAIS, Departamento de Ciencia da Computacao, ICEx/UFMG, 2026.
+\newblock Material de aula.
+
+\end{thebibliography}
